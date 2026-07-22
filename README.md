@@ -115,7 +115,7 @@ available at index 0.
 
 ## Project Report
 
-[REPORT.docx](https://github.com/user-attachments/files/26394145/REPORT.docx)
+[Final Report](docs/MDP%20Final%20Report.pdf)
 
 ## Project Demo Video
 
