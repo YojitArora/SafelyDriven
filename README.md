@@ -38,8 +38,10 @@ source .venv/bin/activate  # Mac/Linux
 
 ### 3. Install dependencies
 ```bash
-pip install opencv-python dlib flask flask-socketio twilio numpy scipy
+pip install -r requirements.txt
 ```
+
+> On macOS, `dlib` may need Xcode Command Line Tools: `xcode-select --install`.
 
 ### 4. Download the AI Model / Dataset (Required)
 The Dlib facial landmark model is too large for GitHub (100MB) and is required to run the code. 
@@ -55,21 +57,37 @@ Create a `.env` file in the root directory:
 TWILIO_ACCOUNT_SID=your_account_sid
 TWILIO_AUTH_TOKEN=your_auth_token
 TWILIO_PHONE_NUMBER=+1xxxxxxxxxx
-EMERGENCY_CONTACT=+91xxxxxxxxxx
+EMERGENCY_CONTACT_PHONE=+91xxxxxxxxxx
+
+# Optional runtime configuration
+FLASK_HOST=127.0.0.1
+FLASK_PORT=5000
+CAMERA_INDEX=0
+# Leave empty to run without Arduino. Otherwise use COM5 or /dev/tty.*
+ARDUINO_PORT=
 ```
+
+Twilio and Arduino are optional. SMS alerts are enabled only when all Twilio
+values are configured; the dashboard can run without either integration.
 
 ### 6. Run the application
 ```bash
 python detector.py
 ```
 
-Then open `http://localhost:5000` in your browser.
+Then open `http://127.0.0.1:5000` in your browser. Change `FLASK_PORT` when
+port 5000 is already in use, and set `CAMERA_INDEX=1` if your camera is not
+available at index 0.
 
 ## ⚠️ Notes
 
 - The `shape_predictor_68_face_landmarks.dat` file (~99MB) is **not** included in the repo. Download it separately.
 - Never commit your `.env` file — it contains API secrets.
 - Requires a webcam for real-time detection.
+- If startup reports a missing landmark model, download and extract the model
+  described above into the project root.
+- Set `ARDUINO_PORT` only when an Arduino is connected; leaving it empty avoids
+  a failed connection attempt on machines without one.
 
 ## 📸 Dashboard Preview
 
