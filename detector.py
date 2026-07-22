@@ -8,13 +8,23 @@ import serial
 import os
 import requests
 from collections import deque
-from flask import Flask, jsonify, send_from_directory, Response
+from flask import Flask, jsonify, request, send_from_directory, Response
 from imutils import face_utils
 from scipy.spatial import distance
 from pygame import mixer
 from emotiefflib.facial_analysis import EmotiEffLibRecognizer
 from twilio.rest import Client
 from dotenv import load_dotenv
+from config import (
+    ARDUINO_PORT,
+    CAMERA_INDEX,
+    EVENT_LOG_PATH,
+    FLASK_HOST,
+    FLASK_PORT,
+    LANDMARK_MODEL_PATH,
+    MUSIC_PATH,
+    PROJECT_ROOT,
+)
 
 # Load environment variables
 load_dotenv(override=True)
@@ -25,16 +35,15 @@ TWILIO_PHONE_NUMBER = os.getenv('TWILIO_PHONE_NUMBER')
 EMERGENCY_CONTACT_PHONE = os.getenv('EMERGENCY_CONTACT_PHONE')
 
 # --- Configuration & State ---
-app = Flask(__name__, static_folder='.', static_url_path='')
+app = Flask(__name__, static_folder=str(PROJECT_ROOT), static_url_path='')
 is_monitoring = False
 monitor_thread = None
 output_frame = None
 lock = threading.Lock()
+ser = None
 
 # Ensure event log directory exists on startup
-EVENT_LOG_PATH = os.path.join(os.getcwd(), "event_log")
-if not os.path.exists(EVENT_LOG_PATH):
-    os.makedirs(EVENT_LOG_PATH)
+EVENT_LOG_PATH.mkdir(exist_ok=True)
 
 # Global state for dashboard
 current_ear = 0.0
@@ -59,21 +68,24 @@ def add_log(msg, level="warning"):
         session_logs.pop(0)
 
 # --- 1. INITIALIZATION ---
-mixer.init()
 try:
-    mixer.music.load("music.wav")
-except:
-    print("Warning: music.wav not found.")
+    mixer.init()
+    mixer.music.load(str(MUSIC_PATH))
+except Exception as error:
+    print(f"Warning: audio alarm disabled: {error}")
 
 def connect_arduino():
     global ser
+    if not ARDUINO_PORT:
+        add_log("Arduino disabled; set ARDUINO_PORT to enable it.", "info")
+        return False
     try:
         if ser:
             ser.close()
-        ser = serial.Serial('COM5', 9600, timeout=1) 
+        ser = serial.Serial(ARDUINO_PORT, 9600, timeout=1)
         time.sleep(2) 
-        print("SUCCESS: Arduino Connected on COM5")
-        add_log("Arduino connected on COM5", "info")
+        print(f"SUCCESS: Arduino Connected on {ARDUINO_PORT}")
+        add_log(f"Arduino connected on {ARDUINO_PORT}", "info")
         return True
     except Exception as e:
         ser = None
@@ -81,16 +93,22 @@ def connect_arduino():
         add_log(f"Arduino connection failed: {e}", "warning")
         return False
 
-# Initial connection attempt
-connect_arduino()
+# Connect only when explicitly configured.
+if ARDUINO_PORT:
+    connect_arduino()
 
 # --- 2. MODELS ---
-fer = EmotiEffLibRecognizer(model_name="enet_b0_8_best_afew", engine="onnx", device="cpu")
+fer = None
+try:
+    fer = EmotiEffLibRecognizer(model_name="enet_b0_8_best_afew", engine="onnx", device="cpu")
+except Exception as error:
+    print(f"Warning: emotion recognition disabled: {error}")
 detect = dlib.get_frontal_face_detector()
 try:
-    predict = dlib.shape_predictor("shape_predictor_68_face_landmarks.dat")
-except:
-    print("Error: 'shape_predictor_68_face_landmarks.dat' not found.")
+    predict = dlib.shape_predictor(str(LANDMARK_MODEL_PATH))
+except Exception as error:
+    predict = None
+    print(f"Error loading landmark model: {error}")
 
 def eye_aspect_ratio(eye):
     A = distance.euclidean(eye[1], eye[5])
@@ -120,8 +138,10 @@ frame_check = 10        # Consecutive frames before triggering alert
 def send_sos_sms_async():
     global sos_triggered, TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_PHONE_NUMBER, EMERGENCY_CONTACT_PHONE
     
-    if not TWILIO_ACCOUNT_SID or not TWILIO_AUTH_TOKEN:
-        print("TWILIO_ACCOUNT_SID or TWILIO_AUTH_TOKEN not properly configured in .env.")
+    if not all((TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_PHONE_NUMBER, EMERGENCY_CONTACT_PHONE)):
+        message = "Twilio is not fully configured; SOS SMS was not sent."
+        print(message)
+        add_log(message, "warning")
         return
 
     # 1. Fetch approximate location via IP geolocation
@@ -167,7 +187,12 @@ def send_sos_sms_async():
 
 def run_detector():
     global is_monitoring, output_frame, current_ear, current_mar, current_blink_freq, safety_score, current_emotion, current_emotion_score, is_stressed, drowsy_start_time, sos_triggered, last_sos_time, sos_trigger_time, drowsy_alarm_active
-    cap = cv2.VideoCapture(1) 
+    cap = cv2.VideoCapture(CAMERA_INDEX)
+    if not cap.isOpened():
+        add_log(f"Could not open camera index {CAMERA_INDEX}.", "danger")
+        is_monitoring = False
+        cap.release()
+        return
     drowsy_flag = 0
     yawn_flag = 0
     anger_flag = 0
@@ -237,6 +262,8 @@ def run_detector():
             is_angry = False
             if face_roi.size > 0:
                 try:
+                    if fer is None:
+                        raise RuntimeError("Emotion recognizer is unavailable")
                     emotion_label, scores = fer.predict_emotions(face_roi, logits=False)
                     # Support both list/string formats from various recognizer versions
                     if isinstance(emotion_label, list):
@@ -437,10 +464,15 @@ def video_feed():
     return Response(generate(),
                     mimetype='multipart/x-mixed-replace; boundary=frame')
 
-@app.route('/start')
+@app.route('/start', methods=['POST'])
 def start_monitoring():
     global is_monitoring, monitor_thread, safety_score, drowsy_start_time, sos_triggered, sos_trigger_time, is_stressed, drowsy_alarm_active
     if not is_monitoring:
+        if predict is None:
+            return jsonify({
+                "status": "error",
+                "message": f"Missing or invalid landmark model: {LANDMARK_MODEL_PATH.name}",
+            }), 503
         is_monitoring = True
         # Full Reset of All Session States
         safety_score = 100 
@@ -457,7 +489,7 @@ def start_monitoring():
         return jsonify({"status": "started", "message": "Detection loop initiated."})
     return jsonify({"status": "already_running"})
 
-@app.route('/stop')
+@app.route('/stop', methods=['POST'])
 def stop_monitoring():
     global is_monitoring, output_frame
     is_monitoring = False
@@ -465,8 +497,6 @@ def stop_monitoring():
         output_frame = None
     add_log("System Monitoring Stopped", "info")
     return jsonify({"status": "stopped", "message": "Detection loop terminated."})
-
-from flask import request
 
 @app.route('/status')
 def get_status():
@@ -496,19 +526,31 @@ def get_logs():
 @app.route('/update_thresholds', methods=['POST'])
 def update_thresholds():
     global ear_thresh, mar_thresh, EMERGENCY_CONTACT_PHONE
-    data = request.json
-    if 'ear_thresh' in data:
-        ear_thresh = float(data['ear_thresh'])
-        add_log(f"EAR Threshold changed to {ear_thresh}", "info")
-    if 'mar_thresh' in data:
-        mar_thresh = float(data['mar_thresh'])
-        add_log(f"MAR Threshold changed to {mar_thresh}", "info")
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({"status": "error", "message": "Expected a JSON object."}), 400
+
+    try:
+        if 'ear_thresh' in data:
+            value = float(data['ear_thresh'])
+            if not 0 < value < 1:
+                raise ValueError("EAR threshold must be between 0 and 1.")
+            ear_thresh = value
+            add_log(f"EAR Threshold changed to {ear_thresh}", "info")
+        if 'mar_thresh' in data:
+            value = float(data['mar_thresh'])
+            if not 0 < value < 2:
+                raise ValueError("MAR threshold must be between 0 and 2.")
+            mar_thresh = value
+            add_log(f"MAR Threshold changed to {mar_thresh}", "info")
+    except (TypeError, ValueError) as error:
+        return jsonify({"status": "error", "message": str(error)}), 400
     if 'emergency_contact' in data:
         EMERGENCY_CONTACT_PHONE = data['emergency_contact']
         add_log(f"Emergency Contact updated to {EMERGENCY_CONTACT_PHONE}", "info")
     return jsonify({"status": "success"})
 
-@app.route('/reconnect_arduino')
+@app.route('/reconnect_arduino', methods=['POST'])
 def reconnect_arduino():
     success = connect_arduino()
     return jsonify({"status": "success" if success else "failed"})
@@ -526,5 +568,5 @@ def serve_event_log(filename):
     return send_from_directory(EVENT_LOG_PATH, filename)
 
 if __name__ == '__main__':
-    print("SafelyDriven Web Server running at http://localhost:5000")
-    app.run(host='0.0.0.0', port=5000, debug=False, threaded=True)
+    print(f"SafelyDriven Web Server running at http://{FLASK_HOST}:{FLASK_PORT}")
+    app.run(host=FLASK_HOST, port=FLASK_PORT, debug=False, threaded=True)

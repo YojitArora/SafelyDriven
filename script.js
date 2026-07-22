@@ -250,7 +250,7 @@ document.addEventListener('DOMContentLoaded', () => {
         e.preventDefault();
         reconnectBtn.innerText = "Connecting...";
         try {
-            const res = await fetch('/reconnect_arduino');
+            const res = await fetch('/reconnect_arduino', { method: 'POST' });
             const data = await res.json();
             if (data.status === 'success') {
                 reconnectBtn.innerText = "Connected!";
@@ -361,9 +361,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
     async function toggleBackend(command) {
         try {
-            const response = await fetch(`/${command}`);
+            const response = await fetch(`/${command}`, { method: 'POST' });
             const data = await response.json();
             console.log(`Backend ${command}:`, data);
+            if (!response.ok) {
+                alert(data.message || `Unable to ${command} monitoring.`);
+                return false;
+            }
             return true;
         } catch (error) {
             console.error(`Error toggling backend ${command}:`, error);
