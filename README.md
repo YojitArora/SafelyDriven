@@ -25,7 +25,7 @@ A real-time AI-powered driver safety system that detects drowsiness, blink rate,
 
 ### 1. Clone the repository
 ```bash
-git clone https://github.com/ARYAN2307A/MDP.git
+git clone https://github.com/YojitArora/SafelyDriven
 cd MDP
 ```
 
@@ -115,7 +115,7 @@ available at index 0.
 
 ## Project Report
 
-[REPORT.docx](https://github.com/user-attachments/files/26394145/REPORT.docx)
+[MDP Final Report.docx](MDP%20Final%20Report.docx)
 
 ## Project Demo Video
 
