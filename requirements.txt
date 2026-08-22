@@ -1,5 +1,5 @@
 Flask>=3.0,<4.0
-dlib>=19.24,<20.0
+dlib-bin>=20.0,<21.0
 emotiefflib
 imutils>=0.5.4,<0.6
 numpy>=1.26,<3.0
